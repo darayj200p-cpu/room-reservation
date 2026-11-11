@@ -1,0 +1,941 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>사업단 회의실 예약</title>
+
+  <!-- 글꼴: Pretendard (불러오지 못하면 시스템 글꼴 사용) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.min.css" />
+
+  <!-- DB 연결(supabase-js v2): 전역 변수 supabase 생성 -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <!-- 차트(Chart.js v4): 전역 변수 Chart 생성 — F5(통계) 단계에서 사용 -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.js"></script>
+
+  <style>
+    /* ===== 색상·기본값 ===== */
+    :root {
+      --green: #1f8a5b;        /* 포인트 색 (초록) */
+      --green-dark: #166b46;   /* 버튼 눌림·강조 */
+      --green-soft: #e6f4ec;   /* 예약된 칸 배경 */
+      --bg: #f4f7f5;           /* 연한 페이지 배경 */
+      --card: #ffffff;         /* 카드 배경 */
+      --text: #1d2a24;         /* 본문 글자 */
+      --muted: #6b7a72;        /* 보조 글자 */
+      --line: #dfe7e2;         /* 테두리 */
+      --past: #eceeed;         /* 지난 날짜 빈칸 (회색) */
+      --today: #fff8d6;        /* 오늘 열 (노란 배경) */
+      --red: #c8372d;          /* 실패·취소 */
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font-family: Pretendard, -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+      font-size: 16px;
+      line-height: 1.5;
+    }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 24px 16px 16px; }
+
+    /* ===== 머리글·탭 ===== */
+    header h1 { margin: 0 0 4px; font-size: 1.5rem; }
+    header p { margin: 0 0 16px; color: var(--muted); font-size: 0.95rem; }
+    .tabs { display: flex; gap: 8px; margin-bottom: 16px; }
+    .tab {
+      border: 1px solid var(--line); background: var(--card); color: var(--text);
+      padding: 8px 20px; border-radius: 999px; font: inherit; cursor: pointer;
+    }
+    .tab.active { background: var(--green); border-color: var(--green); color: #fff; font-weight: 600; }
+
+    /* ===== 카드 ===== */
+    .card {
+      background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+      padding: 20px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+    }
+    .card h2 { margin: 0 0 16px; font-size: 1.15rem; }
+
+    /* ===== 입력 폼 ===== */
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 16px; }
+    .grid .full { grid-column: 1 / -1; }
+    label { display: block; font-size: 0.9rem; color: var(--muted); min-width: 0; }
+    label > input, label > select { display: block; margin-top: 4px; }   /* 제목 아래에 입력칸 */
+    label .req { color: var(--red); }
+    input, select {
+      font: inherit; color: var(--text); padding: 9px 10px; border: 1px solid var(--line);
+      border-radius: 10px; background: #fff; width: 100%; min-width: 0;
+    }
+    input:focus, select:focus { outline: 2px solid var(--green); outline-offset: -1px; border-color: var(--green); }
+    .check { display: flex; align-items: center; gap: 6px; color: var(--text); }
+    .check input { width: auto; margin-top: 0; }
+    .actions { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; }
+    .btn {
+      font: inherit; border: 1px solid var(--green); background: var(--green); color: #fff;
+      padding: 9px 18px; border-radius: 10px; cursor: pointer; font-weight: 600;
+    }
+    .btn:hover { background: var(--green-dark); }
+    .btn:disabled { opacity: 0.6; cursor: not-allowed; }
+    .btn.ghost { background: #fff; color: var(--green); }
+    .btn.ghost:hover { background: var(--green-soft); }
+    .btn.small { padding: 5px 12px; font-size: 0.9rem; }
+    .btn.danger { background: #fff; color: var(--red); border-color: var(--red); }
+    .btn.danger:hover { background: #fdecea; }
+
+    /* ===== 주간 타임테이블 ===== */
+    .tt-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+    .tt-bar select { width: auto; }
+    .tt-range { font-weight: 600; margin-left: auto; }
+    .tt-scroll { overflow-x: auto; }              /* 휴대폰에서 표만 가로로 밀어 보기 */
+    table.tt { width: 100%; min-width: 640px; border-collapse: collapse; table-layout: fixed; }
+    .tt th, .tt td { border: 1px solid var(--line); text-align: center; vertical-align: middle; height: 56px; padding: 4px; }
+    .tt th { background: #f7faf8; font-size: 0.9rem; font-weight: 600; }
+    .tt th.time { width: 108px; font-weight: 500; color: var(--muted); }
+    .tt .today { background: var(--today); }
+    .tt td.past { background: var(--past); }
+    .tt td.booked { background: var(--green-soft); cursor: default; }
+    .tt td.booked strong { display: block; font-size: 0.9rem; }
+    .tt td.booked span { display: block; font-size: 0.75rem; color: var(--muted); word-break: keep-all; }
+    .tt td.today.booked { background: #e3f1d8; }
+    .slot-btn {
+      width: 100%; height: 100%; border: none; background: transparent; color: var(--green);
+      font: inherit; font-size: 0.85rem; cursor: pointer; border-radius: 6px;
+    }
+    .slot-btn:hover { background: var(--green-soft); }
+
+    /* ===== 검색 결과 목록 ===== */
+    .list { margin-top: 16px; display: flex; flex-direction: column; gap: 8px; }
+    .row {
+      display: grid; grid-template-columns: 1.3fr 1.4fr 1.5fr 1.5fr auto; gap: 8px; align-items: center;
+      padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; font-size: 0.95rem;
+    }
+    .row .purpose { color: var(--muted); overflow-wrap: anywhere; }
+    .empty { color: var(--muted); text-align: center; padding: 20px 0; }
+
+    /* ===== 안내 상자 (키 미입력) ===== */
+    .notice {
+      background: #fff8e1; border: 1px solid #f0d58a; border-radius: 16px; padding: 20px; margin-bottom: 16px;
+    }
+    .notice h2 { margin: 0 0 8px; font-size: 1.1rem; }
+    .notice code { background: #fff; padding: 1px 6px; border-radius: 6px; border: 1px solid #f0d58a; }
+
+    /* ===== 알림 (화면 아래 3초) ===== */
+    #toast {
+      position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+      max-width: calc(100% - 32px); padding: 12px 20px; border-radius: 12px; color: #fff;
+      font-weight: 600; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 10;
+    }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+    #toast.ok { background: var(--green); }
+    #toast.err { background: var(--red); }
+
+    /* ===== 통계 (F5) ===== */
+    .stats-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+    .seg { display: inline-flex; border: 1px solid var(--green); border-radius: 10px; overflow: hidden; }
+    .seg-btn { font: inherit; font-size: 0.9rem; border: none; background: #fff; color: var(--green); padding: 6px 16px; cursor: pointer; }
+    .seg-btn.active { background: var(--green); color: #fff; font-weight: 600; }
+    .stats-summary { margin: 12px 0 0; color: var(--text); }
+    .stats-summary b { color: var(--green-dark); }
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+    .chart-card { min-width: 0; }                          /* 캔버스가 칸을 넓히지 않게 해 화면이 좁아질 때 차트도 줄어들게 함 */
+    .chart-card.wide { grid-column: 1 / -1; }
+    .chart-note { margin: -8px 0 12px; font-size: 0.85rem; color: var(--muted); }
+    .chart-box { position: relative; height: 260px; }      /* Chart.js가 이 높이에 맞춰 그림 */
+    .chart-box.tall { height: 420px; }
+
+    /* ===== 바닥글 ===== */
+    footer { text-align: center; font-size: 12px; color: #8a948f; padding: 8px 16px 24px; }
+
+    .hidden { display: none !important; }
+
+    /* ===== 휴대폰 (760px 이하) ===== */
+    @media (max-width: 760px) {
+      .grid { grid-template-columns: repeat(2, 1fr); }     /* 입력칸 2열 */
+      .tt-range { margin-left: 0; width: 100%; }
+      .row { grid-template-columns: 1fr 1fr; }             /* 목록 한 줄을 2열로 접기 */
+      .row .purpose { grid-column: 1 / -1; }
+      .row .btn { justify-self: start; }
+      .charts { grid-template-columns: 1fr; }              /* 차트는 한 줄에 하나씩 */
+      .chart-box.tall { height: 380px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>사업단 회의실 예약</h1>
+      <p>대회의실 · 소회의실1 · 소회의실2를 1시간 단위(09:00~18:00)로 예약합니다.</p>
+    </header>
+
+    <!-- 키를 넣지 않았을 때 보이는 안내 상자 -->
+    <div id="keyNotice" class="notice hidden">
+      <h2>키를 넣어 주세요</h2>
+      <p id="keyNoticeText">
+        index.html 맨 위 &lt;script&gt;의 <code>SUPABASE_URL</code>과 <code>SUPABASE_KEY</code>에
+        Supabase 프로젝트 주소와 공개 키(<code>sb_publishable_...</code>)를 넣은 뒤 새로고침해 주세요.
+        (Supabase → Project Settings → API Keys)
+      </p>
+    </div>
+
+    <!-- 위쪽 탭: 예약 / 통계 -->
+    <nav class="tabs" role="tablist">
+      <button class="tab active" data-tab="reserve" role="tab">예약</button>
+      <button class="tab" data-tab="stats" role="tab">통계</button>
+    </nav>
+
+    <!-- ===== 예약 탭 ===== -->
+    <main id="tab-reserve">
+      <!-- F1. 예약 등록 -->
+      <section class="card" id="formCard">
+        <h2>예약 등록</h2>
+        <form id="bookForm" novalidate>
+          <div class="grid">
+            <label>회의실 <span class="req">*</span>
+              <select id="fRoom" required></select>
+            </label>
+            <label>날짜 <span class="req">*</span>
+              <input type="date" id="fDate" required />
+            </label>
+            <label>시간대 <span class="req">*</span>
+              <select id="fHour" required></select>
+            </label>
+            <label>직원 이름 <span class="req">*</span>
+              <input type="text" id="fName" maxlength="20" placeholder="예: 박민지" autocomplete="off" />
+            </label>
+            <label>조직 <span class="req">*</span>
+              <select id="fOrg">
+                <option value="">조직 선택</option>
+              </select>
+            </label>
+            <label>사용 목적
+              <input type="text" id="fPurpose" maxlength="100" placeholder="선택 (100자 이하)" />
+            </label>
+          </div>
+          <div class="actions">
+            <button type="submit" class="btn" id="saveBtn">예약하기</button>
+          </div>
+        </form>
+      </section>
+
+      <!-- F2. 주간 타임테이블 -->
+      <section class="card">
+        <h2>주간 타임테이블</h2>
+        <div class="tt-bar">
+          <select id="ttRoom" aria-label="타임테이블 회의실"></select>
+          <button class="btn ghost small" id="prevWeek">◀ 이전 주</button>
+          <button class="btn ghost small" id="thisWeek">이번 주</button>
+          <button class="btn ghost small" id="nextWeek">다음 주 ▶</button>
+          <span class="tt-range" id="ttRange"></span>
+        </div>
+        <div class="tt-scroll">
+          <table class="tt" id="ttTable"></table>
+        </div>
+      </section>
+
+      <!-- F3·F4. 예약 검색·취소 -->
+      <section class="card">
+        <h2>예약 검색 · 취소</h2>
+        <div class="grid">
+          <label>직원 이름
+            <input type="text" id="sName" placeholder="이름 일부만 입력해도 됩니다" autocomplete="off" />
+          </label>
+          <label>회의실
+            <select id="sRoom"><option value="">전체</option></select>
+          </label>
+          <label>날짜
+            <input type="date" id="sDate" />
+          </label>
+        </div>
+        <div class="actions" style="align-items:center">
+          <label class="check"><input type="checkbox" id="sPast" /> 지난 예약도 보기</label>
+          <button class="btn ghost small" id="sReset" type="button">초기화</button>
+        </div>
+        <div class="list" id="resultList"></div>
+      </section>
+    </main>
+
+    <!-- ===== 통계 탭 (F5) ===== -->
+    <section id="tab-stats" class="hidden">
+      <!-- 기간 선택 + 새로고침 + 요약 줄 -->
+      <div class="card">
+        <div class="stats-bar">
+          <div class="seg" role="radiogroup" aria-label="통계 기간">
+            <button type="button" class="seg-btn active" data-period="week" role="radio" aria-checked="true">이번 주</button>
+            <button type="button" class="seg-btn" data-period="month" role="radio" aria-checked="false">이번 달</button>
+          </div>
+          <button type="button" class="btn ghost small" id="statsRefresh">새로고침</button>
+        </div>
+        <p class="stats-summary" id="statsSummary">통계를 불러오는 중…</p>
+      </div>
+
+      <!-- 차트 3개 -->
+      <div class="charts">
+        <div class="card chart-card">
+          <h2>회의실별 이용률</h2>
+          <div class="chart-box"><canvas id="chartRooms" aria-label="회의실별 이용률 가로 막대 차트"></canvas></div>
+        </div>
+        <div class="card chart-card">
+          <h2>조직별 이용 횟수</h2>
+          <div class="chart-box"><canvas id="chartOrgs" aria-label="조직별 이용 횟수 세로 막대 차트"></canvas></div>
+        </div>
+        <div class="card chart-card wide">
+          <h2>요일·시간대별 혼잡도</h2>
+          <p class="chart-note">원이 클수록 그 요일·시간대에 예약이 많습니다 (전체 회의실 합계).</p>
+          <div class="chart-box tall"><canvas id="chartHeat" aria-label="요일·시간대별 혼잡도 버블 차트"></canvas></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- 바닥글: 두 탭 모두에 보임 -->
+  <footer>개발자 및 관리자: 이차전지특성화대학사업단 이예진</footer>
+
+  <!-- 알림 상자 -->
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    // ================================================================
+    // 1. 설정: Supabase 프로젝트 주소와 공개 키(publishable key)를 넣습니다.
+    //    비밀 키(sb_secret_...)는 절대 넣지 마세요.
+    // ================================================================
+    const SUPABASE_URL = 'https://akqkwkevudalllrtanvx.supabase.co
+';
+    const SUPABASE_KEY = 'sb_publishable_auCn38iQWCt7XVUNucA0WA_kMnbGx1X';
+
+    // ================================================================
+    // 2. 상수
+    // ================================================================
+    const HOURS = [9, 10, 11, 12, 13, 14, 15, 16, 17];                 // 시작 시각 9칸 (DB start_hour)
+    const ORGS = ['이차전지특성화대학사업단', '공유대학사업단', '대학원']; // DB check와 같은 조직 3개
+    const WEEKDAYS = ['일', '월', '화', '수', '목', '금', '토'];        // 요일 표시용
+
+    // 오류 코드 → 직원이 알아듣는 문구
+    const ERROR_MESSAGES = {
+      '23505': '이미 예약된 시간입니다. 다른 시간대나 날짜를 골라 주세요.',
+      '23514': '입력값이 허용 범위를 벗어났습니다.',
+      '23503': '존재하지 않는 회의실입니다. 새로고침 후 다시 시도해 주세요.',
+      '42501': '권한이 없습니다. Supabase의 RLS 정책을 확인해 주세요.',
+    };
+
+    // ================================================================
+    // 3. 상태
+    // ================================================================
+    let db = null;            // Supabase 클라이언트 (변수 이름은 db)
+    let rooms = [];           // 회의실 목록 [{id, name, location}]
+    let roomById = new Map(); // id → 회의실 빠른 조회
+    let weekStart = null;     // 타임테이블에 보이는 주의 월요일 (Date)
+    let searchTimer = null;   // 이름 검색 0.3초 지연용 타이머
+    let statsPeriod = 'week'; // 통계 기간: 'week'(이번 주) 또는 'month'(이번 달)
+    let charts = {};          // 그려 둔 Chart.js 차트 (다시 그릴 때 지우기 위해 보관)
+
+    // ================================================================
+    // 4. 도우미 함수
+    // ================================================================
+    const $ = (id) => document.getElementById(id);
+
+    /** 화면에 넣을 글자의 특수문자를 바꿔 코드가 실행되지 않게 합니다. */
+    function esc(value) {
+      return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }
+
+    /** Date → 'YYYY-MM-DD' (브라우저 현지 시간 기준, toISOString 사용 안 함) */
+    function toYmd(d) {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${y}-${m}-${day}`;
+    }
+
+    /** 'YYYY-MM-DD' → 현지 시간 자정의 Date */
+    function fromYmd(s) {
+      const [y, m, d] = s.split('-').map(Number);
+      return new Date(y, m - 1, d);
+    }
+
+    /** 오늘 날짜(현지 자정) */
+    function today() {
+      const n = new Date();
+      return new Date(n.getFullYear(), n.getMonth(), n.getDate());
+    }
+
+    /** 날짜에 일 수를 더한 새 Date */
+    function addDays(d, n) {
+      return new Date(d.getFullYear(), d.getMonth(), d.getDate() + n);
+    }
+
+    /** 그 주의 월요일 */
+    function mondayOf(d) {
+      return addDays(d, -((d.getDay() + 6) % 7));
+    }
+
+    /** 주말 여부 */
+    function isWeekend(d) {
+      return d.getDay() === 0 || d.getDay() === 6;
+    }
+
+    /** '11월 16일 (월)' 형식 */
+    function fmtDate(d) {
+      if (typeof d === 'string') d = fromYmd(d);
+      return `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEKDAYS[d.getDay()]})`;
+    }
+
+    /** 시작 시각 → '13:00~14:00' */
+    function hourLabel(h) {
+      const two = (n) => String(n).padStart(2, '0');
+      return `${two(h)}:00~${two(h + 1)}:00`;
+    }
+
+    /** 회의실 번호 → 이름 */
+    function roomName(id) {
+      return roomById.get(Number(id))?.name ?? `회의실 ${id}`;
+    }
+
+    /** 화면 아래에 3초 동안 알림 (ok=true 초록, false 빨강) */
+    function toast(message, ok = true) {
+      const el = $('toast');
+      el.textContent = message;                 // textContent라 코드가 실행되지 않음
+      el.className = `show ${ok ? 'ok' : 'err'}`;
+      clearTimeout(toast.timer);
+      toast.timer = setTimeout(() => { el.className = ''; }, 3000);
+    }
+
+    /** DB 오류 → 알림 문구 */
+    function errorText(error) {
+      return ERROR_MESSAGES[error?.code] ?? `오류가 발생했습니다: ${error?.message ?? error}`;
+    }
+
+    // ================================================================
+    // 5. 시작: 키 확인 → 클라이언트 생성 → 회의실 불러오기
+    // ================================================================
+    function keyProblem() {
+      if (!SUPABASE_URL || !SUPABASE_KEY || SUPABASE_URL.includes('YOUR-') || SUPABASE_KEY.includes('YOUR-')) {
+        return 'example';                                    // 예시 값 그대로
+      }
+      if (SUPABASE_KEY.startsWith('sb_secret_')) return 'secret'; // 비밀 키를 넣은 경우
+      return null;
+    }
+
+    async function init() {
+      setupTabs();         // 탭은 키와 상관없이 동작
+      fillStaticOptions(); // 시간대·조직 선택 목록 채우기
+
+      // 키가 없거나 잘못되면 안내 상자를 보여 주고 멈춤 (콘솔 오류 없이)
+      const problem = keyProblem();
+      if (problem) {
+        if (problem === 'secret') {
+          $('keyNoticeText').textContent =
+            '비밀 키(sb_secret_...)가 들어 있습니다. 즉시 지우고 공개 키(sb_publishable_...)를 넣어 주세요. ' +
+            '이미 GitHub에 올렸다면 Supabase에서 비밀 키를 다시 발급하세요.';
+        }
+        $('keyNotice').classList.remove('hidden');
+        $('tab-reserve').classList.add('hidden');
+        document.querySelector('.tabs').classList.add('hidden');
+        return;
+      }
+      if (typeof supabase === 'undefined') {
+        $('keyNoticeText').textContent = 'supabase-js를 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요.';
+        $('keyNotice').classList.remove('hidden');
+        return;
+      }
+
+      db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+      // 날짜 기본값: 오늘, 주말이면 다음 월요일
+      const t = today();
+      const start = isWeekend(t) ? addDays(t, t.getDay() === 6 ? 2 : 1) : t;
+      $('fDate').value = toYmd(start);
+      $('fDate').min = toYmd(t);                // 오늘 이전은 고를 수 없음
+      weekStart = mondayOf(start);
+
+      setupEvents();
+      await loadRooms();
+      await refreshAll();
+    }
+
+    /** 시간대 9개와 조직 3개를 선택 목록에 채웁니다. */
+    function fillStaticOptions() {
+      $('fHour').innerHTML = HOURS.map((h) => `<option value="${h}">${hourLabel(h)}</option>`).join('');
+      $('fOrg').innerHTML = '<option value="">조직 선택</option>' +
+        ORGS.map((o) => `<option value="${esc(o)}">${esc(o)}</option>`).join('');
+    }
+
+    /** rooms 테이블을 불러와 세 곳의 선택 목록을 채웁니다. */
+    async function loadRooms() {
+      const { data, error } = await db.from('rooms').select('id, name, location').order('id');
+      if (error) { toast(errorText(error), false); return; }
+      rooms = data ?? [];
+      roomById = new Map(rooms.map((r) => [r.id, r]));
+
+      // 오류 없이 0개가 오면 SQL 미실행 또는 rooms 조회 정책·권한 누락 → 원인을 알려 줌
+      if (rooms.length === 0) {
+        toast('회의실 목록이 비어 있습니다. SQL 실행 여부와 rooms 조회 정책을 확인해 주세요.', false);
+      }
+
+      const opts = rooms.map((r) =>
+        `<option value="${r.id}">${esc(r.name)}${r.location ? ' · ' + esc(r.location) : ''}</option>`).join('');
+      $('fRoom').innerHTML = opts;
+      $('ttRoom').innerHTML = opts;
+      $('sRoom').innerHTML = '<option value="">전체</option>' + opts;
+    }
+
+    /** 타임테이블·목록(·통계)을 새로 고칩니다. */
+    async function refreshAll() {
+      await Promise.all([renderTimetable(), runSearch(), loadStats()]); // 통계는 탭이 보일 때만 실제로 그림
+    }
+
+    // ================================================================
+    // 6. 탭 전환
+    // ================================================================
+    function setupTabs() {
+      document.querySelectorAll('.tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.tab').forEach((b) => b.classList.toggle('active', b === btn));
+          const isReserve = btn.dataset.tab === 'reserve';
+          $('tab-reserve').classList.toggle('hidden', !isReserve);
+          $('tab-stats').classList.toggle('hidden', isReserve);
+          if (!isReserve) loadStats();   // 통계 탭이 보일 때 데이터를 불러와 그림
+        });
+      });
+    }
+
+    // ================================================================
+    // 7. 이벤트 연결
+    // ================================================================
+    function setupEvents() {
+      // F1. 예약 등록
+      $('bookForm').addEventListener('submit', onSave);
+
+      // F2. 타임테이블 회의실·주 이동
+      $('ttRoom').addEventListener('change', renderTimetable);
+      $('prevWeek').addEventListener('click', () => { weekStart = addDays(weekStart, -7); renderTimetable(); });
+      $('nextWeek').addEventListener('click', () => { weekStart = addDays(weekStart, 7); renderTimetable(); });
+      $('thisWeek').addEventListener('click', () => { weekStart = mondayOf(today()); renderTimetable(); });
+
+      // F2. 빈칸 "+ 예약" 클릭 (이벤트 위임)
+      $('ttTable').addEventListener('click', (e) => {
+        const btn = e.target.closest('.slot-btn');
+        if (btn) fillFormFromSlot(btn.dataset.date, btn.dataset.hour);
+      });
+
+      // F3. 검색: 이름은 입력 멈춤 0.3초 뒤, 나머지는 바로
+      $('sName').addEventListener('input', () => {
+        clearTimeout(searchTimer);
+        searchTimer = setTimeout(runSearch, 300);
+      });
+      $('sRoom').addEventListener('change', runSearch);
+      $('sDate').addEventListener('change', runSearch);
+      $('sPast').addEventListener('change', runSearch);
+      $('sReset').addEventListener('click', () => {
+        $('sName').value = '';
+        $('sRoom').value = '';
+        $('sDate').value = '';
+        $('sPast').checked = false;
+        runSearch();
+      });
+
+      // F5. 통계 기간 선택·새로고침
+      document.querySelectorAll('.seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          statsPeriod = btn.dataset.period;
+          document.querySelectorAll('.seg-btn').forEach((b) => {
+            b.classList.toggle('active', b === btn);
+            b.setAttribute('aria-checked', String(b === btn));
+          });
+          loadStats();
+        });
+      });
+      $('statsRefresh').addEventListener('click', loadStats);
+
+      // F4. 취소 버튼 (이벤트 위임)
+      $('resultList').addEventListener('click', (e) => {
+        const btn = e.target.closest('.cancel-btn');
+        if (btn) onCancel(btn);
+      });
+    }
+
+    // ================================================================
+    // 8. F1. 예약 등록
+    // ================================================================
+    async function onSave(e) {
+      e.preventDefault();
+
+      // 입력값 읽기
+      const roomId = Number($('fRoom').value);
+      const dateStr = $('fDate').value;
+      const hour = Number($('fHour').value);
+      const name = $('fName').value.trim();
+      const org = $('fOrg').value;
+      const purpose = $('fPurpose').value.trim();
+
+      // 화면 검사 (편의용 — 최종 검사는 DB 제약 조건이 담당)
+      if (!roomId) return toast('회의실을 선택해 주세요.', false);
+      if (!dateStr) return toast('날짜를 선택해 주세요.', false);
+      const date = fromYmd(dateStr);
+      if (isWeekend(date)) return toast('주말은 예약할 수 없습니다. 평일을 골라 주세요.', false);
+      if (date < today()) return toast('지난 날짜는 예약할 수 없습니다.', false);
+      if (!name) { $('fName').focus(); return toast('직원 이름을 입력해 주세요.', false); }
+      if (!org) { $('fOrg').focus(); return toast('조직을 선택해 주세요.', false); }
+
+      // 저장 중 표시 (중복 클릭 방지)
+      const btn = $('saveBtn');
+      btn.disabled = true;
+      btn.textContent = '저장 중…';
+
+      try {
+        const { error } = await db.from('reservations').insert({
+          room_id: roomId,
+          reserved_date: dateStr,
+          start_hour: hour,
+          staff_name: name,
+          org,
+          purpose: purpose || null,
+        });
+
+        if (error) {
+          toast(errorText(error), false);   // 23505면 아래에서 타임테이블을 새로 고쳐 먼저 잡힌 예약을 보여 줌
+        } else {
+          toast(`${fmtDate(date)} ${hourLabel(hour)} ${roomName(roomId)} 예약 완료!`, true);
+          $('fPurpose').value = '';
+        }
+      } catch (err) {
+        toast(errorText(err), false);        // 네트워크 오류 등
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '예약하기';
+        // 성공·실패와 상관없이 타임테이블을 방금 예약한 회의실·주로 맞추고 새로 고침
+        $('ttRoom').value = String(roomId);
+        weekStart = mondayOf(date);
+        await refreshAll();
+      }
+    }
+
+    /** 타임테이블 빈칸 → 예약 등록 칸 채우기 */
+    function fillFormFromSlot(dateStr, hour) {
+      $('fRoom').value = $('ttRoom').value;
+      $('fDate').value = dateStr;
+      $('fHour').value = hour;
+      $('formCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+      $('fName').focus({ preventScroll: true });
+    }
+
+    // ================================================================
+    // 9. F2. 주간 타임테이블
+    // ================================================================
+    async function renderTimetable() {
+      if (!db || !weekStart) return;
+      const roomId = Number($('ttRoom').value);
+      const days = [0, 1, 2, 3, 4].map((i) => addDays(weekStart, i)); // 월~금
+      const from = toYmd(days[0]);
+      const to = toYmd(days[4]);
+      const todayStr = toYmd(today());
+
+      // 기간 표시: '11월 16일 ~ 11월 20일'
+      $('ttRange').textContent =
+        `${days[0].getMonth() + 1}월 ${days[0].getDate()}일 ~ ${days[4].getMonth() + 1}월 ${days[4].getDate()}일`;
+
+      // 회의실이 없으면 빈 화면 대신 안내 문구를 보여 줌
+      if (!roomId) {
+        $('ttTable').innerHTML =
+          '<tbody><tr><td class="empty">회의실 목록을 불러오지 못해 타임테이블을 표시할 수 없습니다.</td></tr></tbody>';
+        return;
+      }
+
+      // 이번 주 해당 회의실 예약 불러오기
+      const { data, error } = await db.from('reservations')
+        .select('reserved_date, start_hour, staff_name, org, purpose')
+        .eq('room_id', roomId)
+        .gte('reserved_date', from)
+        .lte('reserved_date', to);
+      if (error) { toast(errorText(error), false); return; }
+
+      // '날짜|시각' → 예약
+      const booked = new Map((data ?? []).map((r) => [`${r.reserved_date}|${r.start_hour}`, r]));
+
+      // 머리 행: 시간대 + 월~금
+      let html = '<thead><tr><th class="time">시간대</th>';
+      for (const d of days) {
+        const isToday = toYmd(d) === todayStr;
+        html += `<th class="${isToday ? 'today' : ''}">${fmtDate(d)}</th>`;
+      }
+      html += '</tr></thead><tbody>';
+
+      // 본문: 9행 × 5열
+      for (const h of HOURS) {
+        html += `<tr><th class="time">${hourLabel(h)}</th>`;
+        for (const d of days) {
+          const ds = toYmd(d);
+          const r = booked.get(`${ds}|${h}`);
+          const todayCls = ds === todayStr ? ' today' : '';
+          if (r) {
+            // 예약된 칸: 직원 이름 + 조직, 마우스를 올리면 사용 목적
+            html += `<td class="booked${todayCls}" title="${esc(r.purpose || '사용 목적 없음')}">` +
+                    `<strong>${esc(r.staff_name)}</strong><span>${esc(r.org)}</span></td>`;
+          } else if (ds < todayStr) {
+            html += '<td class="past"></td>';                           // 지난 날짜 빈칸 (회색)
+          } else {
+            html += `<td class="${todayCls.trim()}"><button type="button" class="slot-btn" ` +
+                    `data-date="${ds}" data-hour="${h}">+ 예약</button></td>`;
+          }
+        }
+        html += '</tr>';
+      }
+      html += '</tbody>';
+      $('ttTable').innerHTML = html;
+    }
+
+    // ================================================================
+    // 10. F3. 검색
+    // ================================================================
+    async function runSearch() {
+      if (!db) return;
+      const name = $('sName').value.trim();
+      const roomId = $('sRoom').value;
+      const dateStr = $('sDate').value;
+      const showPast = $('sPast').checked;
+
+      let q = db.from('reservations')
+        .select('id, room_id, reserved_date, start_hour, staff_name, org, purpose')
+        .order('reserved_date', { ascending: true })
+        .order('start_hour', { ascending: true })
+        .limit(200);
+
+      // 이름 일부 검색 (% _ \ 는 글자 그대로 찾도록 처리)
+      if (name) q = q.ilike('staff_name', `%${name.replace(/[\\%_]/g, (c) => '\\' + c)}%`);
+      if (roomId) q = q.eq('room_id', Number(roomId));
+      if (dateStr) q = q.eq('reserved_date', dateStr);
+      if (!showPast) q = q.gte('reserved_date', toYmd(today()));   // 기본은 오늘 이후만
+
+      const { data, error } = await q;
+      const list = $('resultList');
+      if (error) {
+        toast(errorText(error), false);
+        list.innerHTML = '<p class="empty">목록을 불러오지 못했습니다.</p>';
+        return;
+      }
+      if (!data || data.length === 0) {
+        list.innerHTML = '<p class="empty">조건에 맞는 예약이 없습니다.</p>';
+        return;
+      }
+
+      // 각 줄: 날짜(요일) / 시간대 · 회의실 / 직원 · 조직 / 사용 목적 / 취소 버튼
+      list.innerHTML = data.map((r) => `
+        <div class="row">
+          <div>${fmtDate(r.reserved_date)}</div>
+          <div>${hourLabel(r.start_hour)} · ${esc(roomName(r.room_id))}</div>
+          <div>${esc(r.staff_name)} · ${esc(r.org)}</div>
+          <div class="purpose">${esc(r.purpose || '-')}</div>
+          <button type="button" class="btn danger small cancel-btn"
+            data-id="${r.id}" data-date="${r.reserved_date}" data-hour="${r.start_hour}"
+            data-room="${r.room_id}" data-name="${esc(r.staff_name)}">취소</button>
+        </div>`).join('');
+    }
+
+    // ================================================================
+    // 11. F4. 취소
+    // ================================================================
+    async function onCancel(btn) {
+      const { id, date, hour, room, name } = btn.dataset;   // dataset은 이스케이프가 풀린 원래 글자
+      const msg = `${fmtDate(date)} ${hourLabel(Number(hour))} ${roomName(room)} (${name}) 예약을 취소할까요?`;
+      if (!confirm(msg)) return;
+
+      btn.disabled = true;
+      try {
+        // .select()로 실제로 지워진 행을 돌려받아 확인
+        const { data, error } = await db.from('reservations').delete().eq('id', Number(id)).select('id');
+        if (error) toast(errorText(error), false);
+        else if (!data || data.length === 0) toast('이미 취소되었거나 삭제 권한이 없습니다.', false);
+        else toast('예약을 취소했습니다.', true);
+      } catch (err) {
+        toast(errorText(err), false);
+      }
+      await refreshAll();
+    }
+
+    // ================================================================
+    // 12. F5. 통계 (Chart.js)
+    // ================================================================
+    const CHART_GREEN = '#1f8a5b';                 // 막대·원 색 (포인트 색과 같음)
+    const CHART_GREEN_FILL = 'rgba(31, 138, 91, 0.72)'; // 버블 채움 (겹쳐도 보이게 살짝 투명)
+    const CHART_GRID = '#e8eeea';                  // 옅은 눈금선
+    const CHART_TEXT = '#6b7a72';                  // 축 글자
+
+    /** 통계 탭이 화면에 보이는지 */
+    function statsVisible() {
+      return !$('tab-stats').classList.contains('hidden');
+    }
+
+    /** 선택한 기간의 시작·끝 날짜 */
+    function statsRange() {
+      const t = today();
+      if (statsPeriod === 'week') {
+        const s = mondayOf(t);                                       // 이번 주 월요일
+        return { from: s, to: addDays(s, 4) };                       // ~ 금요일
+      }
+      return {
+        from: new Date(t.getFullYear(), t.getMonth(), 1),           // 이번 달 1일
+        to: new Date(t.getFullYear(), t.getMonth() + 1, 0),         // 이번 달 말일
+      };
+    }
+
+    /** 기간 안의 평일 수 */
+    function countWeekdays(from, to) {
+      let n = 0;
+      for (let d = from; d <= to; d = addDays(d, 1)) if (!isWeekend(d)) n++;
+      return n;
+    }
+
+    /** '11월 1일' 형식 (요일 없이) */
+    function fmtMonthDay(d) {
+      return `${d.getMonth() + 1}월 ${d.getDate()}일`;
+    }
+
+    /** 기간 내 예약을 불러와 요약 줄과 차트 3개를 그립니다. */
+    async function loadStats() {
+      if (!db || !statsVisible()) return;                           // 통계 탭이 보일 때만
+      const summary = $('statsSummary');
+      if (typeof Chart === 'undefined') {
+        summary.textContent = 'Chart.js를 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요.';
+        return;
+      }
+
+      const { from, to } = statsRange();
+      const weekdays = countWeekdays(from, to);
+      const slots = weekdays * 9;                                    // 회의실당 칸 수 = 평일 수 × 9
+
+      const { data, error } = await db.from('reservations')
+        .select('room_id, reserved_date, start_hour, org')
+        .gte('reserved_date', toYmd(from))
+        .lte('reserved_date', toYmd(to));
+      if (error) {
+        toast(errorText(error), false);
+        summary.textContent = '통계를 불러오지 못했습니다.';
+        return;
+      }
+
+      // 평일 예약만 집계 (칸 수가 평일 기준이므로)
+      const rows = (data ?? []).filter((r) => !isWeekend(fromYmd(r.reserved_date)));
+
+      summary.innerHTML =
+        `기간 <b>${fmtMonthDay(from)} ~ ${fmtMonthDay(to)}</b> · ` +
+        `평일 <b>${weekdays}</b>일 · 회의실당 <b>${slots}</b>칸 (평일 수 × 9) · ` +
+        `예약 <b>${rows.length}</b>건`;
+
+      drawCharts(rows, slots);
+    }
+
+    /** 이전 차트를 지우고 3개를 새로 그립니다. */
+    function drawCharts(rows, slots) {
+      Object.values(charts).forEach((c) => c.destroy());            // 이전 차트 지우기
+      charts = {};
+
+      Chart.defaults.font.family = getComputedStyle(document.body).fontFamily;
+      Chart.defaults.color = CHART_TEXT;
+
+      // ---- 1) 회의실별 이용률 (가로 막대, 0~100%) ----
+      const roomCounts = rooms.map((r) => rows.filter((x) => x.room_id === r.id).length);
+      const roomPct = roomCounts.map((c) => (slots ? Math.round((c / slots) * 1000) / 10 : 0)); // 소수 한 자리
+      charts.rooms = new Chart($('chartRooms'), {
+        type: 'bar',
+        data: {
+          labels: rooms.map((r) => r.name),
+          datasets: [{ data: roomPct, backgroundColor: CHART_GREEN, borderRadius: 4, maxBarThickness: 28 }],
+        },
+        options: {
+          indexAxis: 'y',                                            // 가로 막대
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },                              // 계열이 하나라 범례 없음
+            tooltip: {
+              callbacks: {                                           // 예: '22.2% (10건 / 45칸)'
+                label: (ctx) => `${roomPct[ctx.dataIndex].toFixed(1)}% (${roomCounts[ctx.dataIndex]}건 / ${slots}칸)`,
+              },
+            },
+          },
+          scales: {
+            x: { min: 0, max: 100, ticks: { callback: (v) => `${v}%` }, grid: { color: CHART_GRID } },
+            y: { grid: { display: false } },
+          },
+        },
+      });
+
+      // ---- 2) 조직별 이용 횟수 (세로 막대, 정수 눈금) ----
+      const orgCounts = ORGS.map((o) => rows.filter((x) => x.org === o).length);
+      charts.orgs = new Chart($('chartOrgs'), {
+        type: 'bar',
+        data: {
+          labels: ORGS,
+          datasets: [{ data: orgCounts, backgroundColor: CHART_GREEN, borderRadius: 4, maxBarThickness: 48 }],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: { callbacks: { label: (ctx) => `${ctx.parsed.y}건` } },
+          },
+          scales: {
+            y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: CHART_GRID } }, // 눈금은 정수만
+            x: { grid: { display: false } },
+          },
+        },
+      });
+
+      // ---- 3) 요일·시간대별 혼잡도 (버블) ----
+      // grid[요일 0~4][시작 시각] = 전체 회의실 예약 건수
+      const grid = {};
+      for (const r of rows) {
+        const day = (fromYmd(r.reserved_date).getDay() + 6) % 7;     // 월=0 … 금=4
+        const key = `${day}|${r.start_hour}`;
+        grid[key] = (grid[key] || 0) + 1;
+      }
+      const maxCount = Math.max(1, ...Object.values(grid));
+      const points = Object.entries(grid).map(([key, c]) => {        // 0건인 칸은 점을 만들지 않음
+        const [day, hour] = key.split('|').map(Number);
+        return { x: day, y: hour, r: Math.max(5, 18 * Math.sqrt(c / maxCount)), count: c }; // 면적이 건수에 비례
+      });
+      const DAY_LABELS = ['월', '화', '수', '목', '금'];
+      charts.heat = new Chart($('chartHeat'), {
+        type: 'bubble',
+        data: {
+          datasets: [{ data: points, backgroundColor: CHART_GREEN_FILL, borderColor: '#ffffff', borderWidth: 2 }],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {                                           // 예: '화 13:00~14:00 · 3건'
+                label: (ctx) => `${DAY_LABELS[ctx.raw.x]} ${hourLabel(ctx.raw.y)} · ${ctx.raw.count}건`,
+              },
+            },
+          },
+          scales: {
+            x: {
+              min: -0.5, max: 4.5,                                   // 양 끝 원이 잘리지 않게 반 칸 여유
+              afterBuildTicks: (axis) => { axis.ticks = [0, 1, 2, 3, 4].map((value) => ({ value })); }, // 눈금을 정수 위치에 고정
+              ticks: { callback: (v) => DAY_LABELS[v] ?? '' },       // x축: 월~금
+              grid: { color: CHART_GRID },
+            },
+            y: {
+              reverse: true,                                         // 09:00이 위쪽
+              min: 8.5, max: 17.5,                                   // 위아래 반 칸 여유
+              afterBuildTicks: (axis) => { axis.ticks = HOURS.map((value) => ({ value })); }, // 9~17 시작 시각에 눈금
+              ticks: { callback: (v) => `${String(v).padStart(2, '0')}:00` }, // y축: 09:00~17:00
+              grid: { color: CHART_GRID },
+            },
+          },
+        },
+      });
+    }
+
+    // ================================================================
+    // 13. 실행
+    // ================================================================
+    init();
+  </script>
+</body>
+</html>
